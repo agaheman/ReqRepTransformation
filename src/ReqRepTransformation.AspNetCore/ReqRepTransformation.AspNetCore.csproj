@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <AssemblyName>ReqRepTransformation.AspNetCore</AssemblyName>
+    <RootNamespace>ReqRepTransformation.AspNetCore</RootNamespace>
+    <Description>ASP.NET Core Middleware adapter and integration for ReqRepTransformation.</Description>
+    <PackageId>ReqRepTransformation.AspNetCore</PackageId>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReqRepTransformation.Core\ReqRepTransformation.Core.csproj" />
+  </ItemGroup>
+
+</Project>

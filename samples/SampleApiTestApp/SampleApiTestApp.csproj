@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <AssemblyName>SampleApiTestApp</AssemblyName>
+    <RootNamespace>SampleApiTestApp</RootNamespace>
+    <Description>Sample ASP.NET Core 9 API demonstrating ReqRepTransformation pipeline.</Description>
+    <UserSecretsId>sample-api-test-app</UserSecretsId>
+  </PropertyGroup>
+  
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+  
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.0" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting"              Version="1.9.0" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore"      Version="1.9.0" />
+    <PackageReference Include="OpenTelemetry.Exporter.Console"                Version="1.9.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore"                        Version="7.2.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\ReqRepTransformation.Core\ReqRepTransformation.Core.csproj" />
+    <ProjectReference Include="..\..\src\ReqRepTransformation.AspNetCore\ReqRepTransformation.AspNetCore.csproj" />
+    <ProjectReference Include="..\..\src\ReqRepTransformation.Transforms\ReqRepTransformation.Transforms.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>13</LangVersion>
+    <AssemblyName>ReqRepTransformation.Transforms</AssemblyName>
+    <RootNamespace>ReqRepTransformation.Transforms</RootNamespace>
+    <Description>Built-in transform implementations: headers, address, body (JSON/XML/Form), JWT.</Description>
+    <PackageId>ReqRepTransformation.Transforms</PackageId>
+    <Version>1.0.0</Version>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
+    <DebugSymbols>true</DebugSymbols>
+    <Optimize>false</Optimize>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.IdentityModel.Tokens.Jwt" Version="8.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ReqRepTransformation.Core\ReqRepTransformation.Core.csproj" />
+  </ItemGroup>
+
+</Project>
