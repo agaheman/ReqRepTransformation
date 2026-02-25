@@ -9,7 +9,7 @@ namespace ReqRepTransformation.Core.Models;
 /// constructor or factory method.
 ///
 /// Design contract:
-///   - Each transformer declares which keys it reads from <see />.
+///   - Each transformer declares which keys it reads via <see cref="GetString"/> or <see cref="GetRequiredString"/>.
 ///   - The JSON is parsed lazily on first access and cached.
 ///   - All transformers receive this object; they call Get&lt;T&gt;() or GetRequired&lt;T&gt;()
 ///     to read their typed parameters.
@@ -18,7 +18,7 @@ namespace ReqRepTransformation.Core.Models;
 /// </summary>
 public sealed class TransformerParams
 {
-    public static readonly TransformerParams Empty = new(null);
+    public static readonly TransformerParams Empty = new((string?)null);
 
     private readonly JsonObject? _json;
 
