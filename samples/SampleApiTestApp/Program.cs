@@ -3,6 +3,7 @@ using Microsoft.IdentityModel.Tokens;
 using OpenTelemetry.Resources;
 using OpenTelemetry.Trace;
 using ReqRepTransformation.AspNetCore.DI;
+using ReqRepTransformation.BuiltInTransformers;
 using ReqRepTransformation.Core.Abstractions;
 using ReqRepTransformation.Core.Infrastructure.Telemetry;
 using ReqRepTransformation.Core.Models;
@@ -13,34 +14,32 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
-{
-    c.SwaggerDoc("v1", new() { Title = "ReqRepTransformation Sample API", Version = "v1" });
-});
+    c.SwaggerDoc("v1", new() { Title = "ReqRepTransformation Sample API", Version = "v1" }));
 
-// ── JWT (demo — use real keys in production) ─────────────────────
-//builder.Services
-//    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-//    .AddJwtBearer(options =>
-//    {
-//        options.TokenValidationParameters = new TokenValidationParameters
-//        {
-//            ValidateIssuer           = false,
-//            ValidateAudience         = false,
-//            ValidateLifetime         = false,
-//            ValidateIssuerSigningKey = false,
-//            SignatureValidator = (token, _) =>
-//                new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(token)
-//        };
-//    });
+// ── JWT (demo — use real signing keys in production) ─────────────────────────
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer           = false,
+            ValidateAudience         = false,
+            ValidateLifetime         = false,
+            ValidateIssuerSigningKey = false,
+            SignatureValidator = (token, _) =>
+                new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler().ReadJwtToken(token)
+        };
+    });
 
-// ── Memory Cache (used by SampleTransformationDetailProvider) ────
+// ── Memory Cache (required by SampleTransformationDetailProvider) ────────────
 builder.Services.AddMemoryCache();
 
-// ── ReqRepTransformation ─────────────────────────────────────────
+// ── 1. Core pipeline + ASP.NET Core middleware ───────────────────────────────
 builder.Services.AddReqRepTransformationAspNet(options =>
 {
-    options.DefaultTimeout     = TimeSpan.FromSeconds(15);
-    options.DefaultFailureMode = FailureMode.LogAndSkip;   // global fallback
+    options.DefaultTimeout     = TimeSpan.FromSeconds(5);
+    options.DefaultFailureMode = FailureMode.LogAndSkip;
     options.CircuitBreaker     = new CircuitBreakerOptions
     {
         WindowSize            = 20,
@@ -49,15 +48,18 @@ builder.Services.AddReqRepTransformationAspNet(options =>
     };
 });
 
-// ── Register your ITransformationDetailProvider ──────────────────
-// Replace SampleTransformationDetailProvider with a DB-backed one in production.
+// ── 2. All 22 built-in ITransformer implementations as keyed services ────────
+//    + TransformationDetailBuilder singleton
+builder.Services.AddBuiltInTransformers();
+
+// ── 3. ITransformationDetailProvider (replace with a DB-backed one in prod) ──
 builder.Services.AddSingleton<ITransformationDetailProvider, SampleTransformationDetailProvider>();
 
-// ── OpenTelemetry ────────────────────────────────────────────────
+// ── OpenTelemetry ────────────────────────────────────────────────────────────
 builder.Services.AddOpenTelemetry()
-    .ConfigureResource(r => r.AddService("SampleApiTestApp", serviceVersion: "1.0.0"))
+    .ConfigureResource(r => r.AddService("SampleApiTestApp", serviceVersion: "1.0"))
     .WithTracing(tracing => tracing
-        .AddSource(TelemetryConstants.ActivitySourceName)
+        .AddSource(TelemetryConstants.ActivitySourceName)   // "ReqRepTransformation"
         .AddAspNetCoreInstrumentation()
         .AddConsoleExporter());
 
@@ -70,10 +72,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
-//app.UseAuthentication();
-//app.UseAuthorization();
+app.UseAuthentication();
+app.UseAuthorization();
 
-// After auth (JWT available) — before MapControllers (rewrites affect routing)
+// After auth (JWT available to transforms), before MapControllers
 app.UseReqRepTransformation();
 
 app.MapControllers();

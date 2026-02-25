@@ -22,7 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ReqRepTransformation.Core\ReqRepTransformation.Core.csproj" />
     <ProjectReference Include="..\..\src\ReqRepTransformation.AspNetCore\ReqRepTransformation.AspNetCore.csproj" />
-    <ProjectReference Include="..\..\src\ReqRepTransformation.Transforms\ReqRepTransformation.Transforms.csproj" />
+    <ProjectReference Include="..\..\src\ReqRepTransformation.BuiltInTransformers\ReqRepTransformation.BuiltInTransformers.csproj" />
     <ProjectReference Include="..\ReqRepTransformation.Core.Tests\ReqRepTransformation.Core.Tests.csproj" />
   </ItemGroup>
 </Project>

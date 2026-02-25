@@ -7,13 +7,13 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.Core",
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.AspNetCore", "src\ReqRepTransformation.AspNetCore\ReqRepTransformation.AspNetCore.csproj", "{A1000002-0000-0000-0000-000000000002}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.Transforms", "src\ReqRepTransformation.Transforms\ReqRepTransformation.Transforms.csproj", "{A1000003-0000-0000-0000-000000000003}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.BuiltInTransformers", "src\ReqRepTransformation.BuiltInTransformers\ReqRepTransformation.BuiltInTransformers.csproj", "{A1000003-0000-0000-0000-000000000003}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SampleApiTestApp", "samples\SampleApiTestApp\SampleApiTestApp.csproj", "{A1000004-0000-0000-0000-000000000004}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.Core.Tests", "tests\ReqRepTransformation.Core.Tests\ReqRepTransformation.Core.Tests.csproj", "{A1000005-0000-0000-0000-000000000005}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.Transforms.Tests", "tests\ReqRepTransformation.Transforms.Tests\ReqRepTransformation.Transforms.Tests.csproj", "{A1000006-0000-0000-0000-000000000006}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.BuiltInTransformers.Tests", "tests\ReqRepTransformation.Transforms.Tests\ReqRepTransformation.Transforms.Tests.csproj", "{A1000006-0000-0000-0000-000000000006}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ReqRepTransformation.AspNetCore.Tests", "tests\ReqRepTransformation.AspNetCore.Tests\ReqRepTransformation.AspNetCore.Tests.csproj", "{A1000007-0000-0000-0000-000000000007}"
 EndProject

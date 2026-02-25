@@ -10,16 +10,19 @@ using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using ReqRepTransformation.AspNetCore.DI;
+using ReqRepTransformation.BuiltInTransformers;
+using ReqRepTransformation.BuiltInTransformers.Body;
+using ReqRepTransformation.BuiltInTransformers.Headers;
 using ReqRepTransformation.Core.Abstractions;
 using ReqRepTransformation.Core.Models;
-using ReqRepTransformation.Transforms.Body;
-using ReqRepTransformation.Transforms.Headers;
 using Xunit;
 
 namespace ReqRepTransformation.AspNetCore.Tests;
 
 public sealed class GatewayTransformMiddlewareTests
 {
+    // ── TestServer builder ────────────────────────────────────────────────────
+
     private static TestServer CreateTestServer(
         ITransformationDetailProvider provider,
         RequestDelegate? endpoint = null)
@@ -43,6 +46,8 @@ public sealed class GatewayTransformMiddlewareTests
         return new TestServer(host);
     }
 
+    // ── Provider stub ─────────────────────────────────────────────────────────
+
     private static ITransformationDetailProvider ProviderWith(
         TransformEntry[]? request  = null,
         TransformEntry[]? response = null)
@@ -60,10 +65,24 @@ public sealed class GatewayTransformMiddlewareTests
         return p;
     }
 
+    // ── Helper: build + configure a transformer inline ────────────────────────
+
+    private static T Configured<T>(string paramsJson = "{}") where T : ITransformer, new()
+    {
+        var t = new T();
+        t.Configure(new TransformerParams(paramsJson));
+        return t;
+    }
+
+    // ── Tests ─────────────────────────────────────────────────────────────────
+
     [Fact]
     public async Task Middleware_InjectsCorrelationId_WhenAbsent()
     {
-        var provider = ProviderWith(request: new[] { TransformEntry.At(10, new CorrelationIdTransform()) });
+        var provider = ProviderWith(request: new[]
+        {
+            TransformEntry.At(10, Configured<CorrelationIdTransformer>())
+        });
 
         using var server = CreateTestServer(provider, async ctx =>
         {
@@ -81,7 +100,10 @@ public sealed class GatewayTransformMiddlewareTests
     [Fact]
     public async Task Middleware_MutatesJsonBody_WithGatewayMetadata()
     {
-        var provider = ProviderWith(request: new[] { TransformEntry.At(10, new JsonGatewayMetadataTransform()) });
+        var provider = ProviderWith(request: new[]
+        {
+            TransformEntry.At(10, Configured<JsonGatewayMetadataTransformer>("""{"version":"1.0"}"""))
+        });
 
         using var server = CreateTestServer(provider, async ctx =>
         {
@@ -101,8 +123,11 @@ public sealed class GatewayTransformMiddlewareTests
     [Fact]
     public async Task Middleware_AddsResponseHeader_FromResponseTransform()
     {
-        var provider = ProviderWith(
-            response: new[] { TransformEntry.At(10, new AddHeaderTransform("X-Gateway-Version", "1.0")) });
+        var provider = ProviderWith(response: new[]
+        {
+            TransformEntry.At(10, Configured<AddHeaderTransformer>(
+                """{"key":"X-Gateway-Version","value":"1.0"}"""))
+        });
 
         using var server = CreateTestServer(provider);
         var res = await server.CreateClient().GetAsync("/test");
@@ -129,10 +154,10 @@ public sealed class GatewayTransformMiddlewareTests
     {
         var callOrder = new List<int>();
 
-        // Register at Order 30 first, then 10 — middleware must sort ASC
-        var t10 = new OrderTrackingTransform(1, callOrder);
-        var t30 = new OrderTrackingTransform(3, callOrder);
-        var t20 = new OrderTrackingTransform(2, callOrder);
+        // Registered at orders 30, 10, 20 — executor MUST sort to 10 → 20 → 30
+        var t10 = new OrderTrackingTransformer(1, callOrder);
+        var t30 = new OrderTrackingTransformer(3, callOrder);
+        var t20 = new OrderTrackingTransformer(2, callOrder);
 
         var provider = ProviderWith(request: new[]
         {
@@ -147,14 +172,23 @@ public sealed class GatewayTransformMiddlewareTests
         callOrder.Should().Equal(1, 2, 3);
     }
 
-    private sealed class OrderTrackingTransform : IBufferTransform
+    // ── Test doubles ──────────────────────────────────────────────────────────
+
+    private sealed class OrderTrackingTransformer : IBufferTransformer
     {
-        private readonly int _id;
+        private readonly int       _id;
         private readonly List<int> _list;
-        public OrderTrackingTransform(int id, List<int> list) { _id = id; _list = list; }
+
+        public OrderTrackingTransformer(int id, List<int> list) { _id = id; _list = list; }
+
         public string Name => $"order-tracker-{_id}";
+        public void Configure(TransformerParams @params) { /* no params */ }
         public bool ShouldApply(IMessageContext _) => true;
+
         public ValueTask ApplyAsync(IMessageContext _, CancellationToken ct)
-        { _list.Add(_id); return ValueTask.CompletedTask; }
+        {
+            _list.Add(_id);
+            return ValueTask.CompletedTask;
+        }
     }
 }

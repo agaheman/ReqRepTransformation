@@ -20,13 +20,10 @@ public static class PooledMemoryManager
     {
         // Use the settings constructor that is stable across 2.x and 3.x
         // BlockSize=128KB, LargeBufferMultiple=1MB, MaxBufferSize=128MB
-        var recyclableMemoryStreamManagerOption = new RecyclableMemoryStreamManager.Options
-        {
-            BlockSize = 128 * 1024,
-            LargeBufferMultiple = 1024 * 1024,
-            MaximumBufferSize = 128 * 1024 * 1024
-        };  
-        _manager = new RecyclableMemoryStreamManager(recyclableMemoryStreamManagerOption);
+        _manager = new RecyclableMemoryStreamManager(
+            blockSize:            128  * 1024,
+            largeBufferMultiple:  1024 * 1024,
+            maximumBufferSize:    128  * 1024 * 1024);
     }
 
     /// <summary>Returns a pooled MemoryStream. Caller must dispose after use.</summary>

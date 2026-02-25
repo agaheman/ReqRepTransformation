@@ -1,76 +1,65 @@
 using Microsoft.Extensions.Caching.Memory;
+using ReqRepTransformation.BuiltInTransformers;
 using ReqRepTransformation.Core.Abstractions;
 using ReqRepTransformation.Core.Models;
-using ReqRepTransformation.Transforms.Address;
-using ReqRepTransformation.Transforms.Auth;
-using ReqRepTransformation.Transforms.Body;
-using ReqRepTransformation.Transforms.Headers;
 
 namespace SampleApiTestApp.Providers;
 
 /// <summary>
-/// Sample ITransformationDetailProvider: route-based, in-memory, cached.
+/// Sample <see cref="ITransformationDetailProvider"/> that simulates loading transformer
+/// configuration from a database.
 ///
-/// Route rules:
-///   POST /api/orders  → correlationId(10) → requestId(20) → jwtForward(30) → jwtClaims(40) → gatewayMeta(50)
-///                       response: removeInternal(10) → gatewayTag(20)
-///   GET  /api/products → correlationId(10) → jwtForward(20) → catalogRewrite(30)
-///                        response: removeInternal(10)
-///   ANY  /api/admin   → correlationId(10) → stripAuth(20) → internalKey(30)  [StopPipeline]
-///   default           → correlationId(10) only
+/// Architecture:
+///   1. <see cref="GetCurrentRouteTransformers"/> simulates a DB query — returns a list of
+///      <see cref="RouteTransformerEntry"/> records (TransformerKey + ParamsJson + Order + Side).
+///   2. <see cref="Resolve"/> calls <see cref="GetCurrentRouteTransformers"/> and passes
+///      the entries to <see cref="TransformationDetailBuilder.Build"/> which resolves the
+///      keyed <see cref="ITransformer"/> services from DI and calls Configure(params) on each.
+///   3. Results are cached per method+path to avoid repeated DI resolution.
 ///
-/// TransformEntry.Order governs execution sequence — PipelineExecutor sorts ASC.
-/// Replace this class with a database-backed provider in production.
+/// In production, replace <see cref="GetCurrentRouteTransformers"/> with a real repository
+/// that executes:
+/// <code>
+///   SELECT transformer_key, params_json, execution_order, transformer_side
+///   FROM route_transformers
+///   WHERE method = @method AND path_pattern = @path AND is_active = true
+///   ORDER BY execution_order ASC
+/// </code>
 /// </summary>
 public sealed class SampleTransformationDetailProvider : ITransformationDetailProvider
 {
-    private readonly IMemoryCache _cache;
+    private readonly TransformationDetailBuilder _builder;
+    private readonly IMemoryCache                _cache;
     private readonly ILogger<SampleTransformationDetailProvider> _logger;
 
-    // ── Shared, stateless transform instances (safe to reuse across routes) ──
-    private static readonly CorrelationIdTransform          _correlationId  = new();
-    private static readonly RequestIdPropagationTransform   _requestId      = new();
-    private static readonly JwtForwardTransform             _jwtForward     = new();
-    private static readonly RemoveInternalResponseHeadersTransform _removeInternal = new();
-    private static readonly GatewayResponseTagTransform     _gatewayTag     = new();
-    private static readonly JsonGatewayMetadataTransform    _gatewayMeta    = new();
-    private static readonly StripAuthorizationTransform     _stripAuth      = new();
-    private static readonly PathPrefixRewriteTransform      _catalogRewrite = new("/api/products", "/catalog");
-    private static readonly AddHeaderTransform              _internalKey    = new("X-Internal-Key", "sample-key-use-secrets-manager");
-
-    private static readonly JwtClaimsExtractTransform _jwtClaims = new(
-        new Dictionary<string, string>
-        {
-            ["sub"]   = "X-User-Id",
-            ["email"] = "X-User-Email"
-        });
-
     public SampleTransformationDetailProvider(
-        IMemoryCache cache,
+        TransformationDetailBuilder builder,
+        IMemoryCache  cache,
         ILogger<SampleTransformationDetailProvider> logger)
     {
-        _cache  = cache;
-        _logger = logger;
+        _builder = builder;
+        _cache   = cache;
+        _logger  = logger;
     }
 
     public ValueTask<TransformationDetail> GetTransformationDetailAsync(
         IMessageContext context, CancellationToken ct = default)
     {
-        var key = $"{context.Method}:{NormalizePath(context.Address.AbsolutePath)}";
+        var cacheKey = $"{context.Method}:{NormalizePath(context.Address.AbsolutePath)}";
 
-        if (_cache.TryGetValue(key, out TransformationDetail? cached) && cached is not null)
+        if (_cache.TryGetValue(cacheKey, out TransformationDetail? cached) && cached is not null)
             return ValueTask.FromResult(cached);
 
         var detail = Resolve(context);
 
-        _cache.Set(key, detail, new MemoryCacheEntryOptions
+        _cache.Set(cacheKey, detail, new MemoryCacheEntryOptions
         {
             AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5),
             SlidingExpiration               = TimeSpan.FromMinutes(2)
         });
 
         _logger.LogDebug(
-            "TransformationDetail resolved | {Method} {Path} | Req:{R} Res:{Rs}",
+            "TransformationDetail resolved | {Method} {Path} | Req:{Rq} Res:{Rs}",
             context.Method, context.Address.AbsolutePath,
             detail.RequestTransformations.Count,
             detail.ResponseTransformations.Count);
@@ -78,91 +67,156 @@ public sealed class SampleTransformationDetailProvider : ITransformationDetailPr
         return ValueTask.FromResult(detail);
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Route matching — Order values drive execution sequence
-    // ──────────────────────────────────────────────────────────────
+    // ──────────────────────────────────────────────────────────────────────────
+    // Resolve: calls GetCurrentRouteTransformers and builds TransformationDetail
+    // ──────────────────────────────────────────────────────────────────────────
 
-    private static TransformationDetail Resolve(IMessageContext ctx)
+    private TransformationDetail Resolve(IMessageContext ctx)
     {
-        var path   = ctx.Address.AbsolutePath;
-        var method = ctx.Method;
+        var entries = GetCurrentRouteTransformers(ctx.Method, ctx.Address.AbsolutePath);
 
-        // POST /api/orders
+        if (entries.Count == 0)
+            return TransformationDetail.Empty;
+
+        // TransformationDetailBuilder resolves each keyed ITransformer from DI,
+        // calls Configure(new TransformerParams(entry.ParamsJson)) on each instance,
+        // and assembles the TransformationDetail sorted by Order.
+        return _builder.Build(
+            entries,
+            timeout:     TimeSpan.FromSeconds(3),
+            failureMode: FailureMode.LogAndSkip);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // GetCurrentRouteTransformers
+    // Simulates loading from DB: returns RouteTransformerEntry list for the route.
+    //
+    // In production replace with:
+    //   await _repository.GetRouteTransformersAsync(method, path, ct)
+    //
+    // Each RouteTransformerEntry has:
+    //   TransformerKey — matches a TransformerKeys constant (= keyed service key)
+    //   ParamsJson     — JSON string with the transformer's config (can be null)
+    //   Order          — execution order within the side (ASC)
+    //   Side           — Request or Response
+    // ──────────────────────────────────────────────────────────────────────────
+
+    private static IReadOnlyList<RouteTransformerEntry> GetCurrentRouteTransformers(
+        string method, string path)
+    {
+        // ── POST /api/orders ─────────────────────────────────────────────────
         if (method.Equals("POST", StringComparison.OrdinalIgnoreCase)
             && path.StartsWith("/api/orders", StringComparison.OrdinalIgnoreCase))
         {
-            return new TransformationDetail
+            return new[]
             {
-                RequestTransformations = new[]
-                {
-                    TransformEntry.At(10, _correlationId),  // 1st — inject correlation id
-                    TransformEntry.At(20, _requestId),      // 2nd — inject request id
-                    TransformEntry.At(30, _jwtForward),     // 3rd — forward JWT
-                    TransformEntry.At(40, _jwtClaims),      // 4th — extract claims → headers
-                    TransformEntry.At(50, _gatewayMeta)     // 5th — inject _gateway JSON field
-                },
-                ResponseTransformations = new[]
-                {
-                    TransformEntry.At(10, _removeInternal), // strip backend headers
-                    TransformEntry.At(20, _gatewayTag)      // tag response
-                },
-                TransformationTimeout  = TimeSpan.FromSeconds(3),
-                FailureMode            = FailureMode.LogAndSkip,
-                HasExplicitFailureMode = true
+                // Request-side transformers (Order drives execution sequence)
+                RouteTransformerEntry.Create(
+                    TransformerKeys.CorrelationId,
+                    TransformerSide.Request, order: 10,
+                    paramsJson: null),                     // uses default X-Correlation-Id
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.RequestId,
+                    TransformerSide.Request, order: 20,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.JwtForward,
+                    TransformerSide.Request, order: 30,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.JwtClaimsExtract,
+                    TransformerSide.Request, order: 40,
+                    // pipe-separated "claimType=HeaderName" pairs stored as JSON string
+                    paramsJson: """{"claimMap":"sub=X-User-Id|email=X-User-Email"}"""),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.JsonGatewayMetadata,
+                    TransformerSide.Request, order: 50,
+                    paramsJson: """{"version":"2.0"}"""),
+
+                // Response-side transformers
+                RouteTransformerEntry.Create(
+                    TransformerKeys.RemoveInternalResponseHeaders,
+                    TransformerSide.Response, order: 10,
+                    paramsJson: """{"headers":"X-Internal-Token|X-Backend-Version|Server|X-Powered-By"}"""),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.GatewayResponseTag,
+                    TransformerSide.Response, order: 20,
+                    paramsJson: """{"version":"2.0","instanceId":"gateway-sample"}""")
             };
         }
 
-        // GET /api/products
+        // ── GET /api/products ────────────────────────────────────────────────
         if (method.Equals("GET", StringComparison.OrdinalIgnoreCase)
             && path.StartsWith("/api/products", StringComparison.OrdinalIgnoreCase))
         {
-            return new TransformationDetail
+            return new[]
             {
-                RequestTransformations = new[]
-                {
-                    TransformEntry.At(10, _correlationId),
-                    TransformEntry.At(20, _jwtForward),
-                    TransformEntry.At(30, _catalogRewrite)  // /api/products → /catalog
-                },
-                ResponseTransformations = new[]
-                {
-                    TransformEntry.At(10, _removeInternal)
-                },
-                TransformationTimeout  = TimeSpan.FromSeconds(3),
-                FailureMode            = FailureMode.LogAndSkip,
-                HasExplicitFailureMode = true
+                RouteTransformerEntry.Create(
+                    TransformerKeys.CorrelationId,
+                    TransformerSide.Request, order: 10,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.JwtForward,
+                    TransformerSide.Request, order: 20,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.PathPrefixRewrite,
+                    TransformerSide.Request, order: 30,
+                    paramsJson: """{"fromPrefix":"/api/products","toPrefix":"/catalog"}"""),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.RemoveInternalResponseHeaders,
+                    TransformerSide.Response, order: 10,
+                    paramsJson: null)
             };
         }
 
-        // ANY /api/admin — fail hard (StopPipeline)
+        // ── ANY /api/admin ───────────────────────────────────────────────────
         if (path.StartsWith("/api/admin", StringComparison.OrdinalIgnoreCase))
         {
-            return new TransformationDetail
+            return new[]
             {
-                RequestTransformations = new[]
-                {
-                    TransformEntry.At(10, _correlationId),
-                    TransformEntry.At(20, _stripAuth),      // remove JWT before forwarding
-                    TransformEntry.At(30, _internalKey)     // inject internal service key
-                },
-                ResponseTransformations = new[]
-                {
-                    TransformEntry.At(10, _removeInternal)
-                },
-                FailureMode            = FailureMode.StopPipeline,  // admin: fail hard
-                HasExplicitFailureMode = true
+                RouteTransformerEntry.Create(
+                    TransformerKeys.CorrelationId,
+                    TransformerSide.Request, order: 10,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.StripAuthorization,
+                    TransformerSide.Request, order: 20,
+                    paramsJson: null),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.AddHeader,
+                    TransformerSide.Request, order: 30,
+                    // params carry what the add-header transformer needs
+                    paramsJson: """{"key":"X-Internal-Key","value":"sample-key-change-in-prod","overwrite":true}"""),
+
+                RouteTransformerEntry.Create(
+                    TransformerKeys.RemoveInternalResponseHeaders,
+                    TransformerSide.Response, order: 10,
+                    paramsJson: null)
             };
         }
 
-        // Default: correlation ID only
-        return new TransformationDetail
+        // ── Default: correlation ID only ─────────────────────────────────────
+        return new[]
         {
-            RequestTransformations  = new[] { TransformEntry.At(10, _correlationId) },
-            ResponseTransformations = Array.Empty<TransformEntry>(),
-            HasExplicitFailureMode  = false  // → falls back to PipelineOptions.DefaultFailureMode
+            RouteTransformerEntry.Create(
+                TransformerKeys.CorrelationId,
+                TransformerSide.Request, order: 10,
+                paramsJson: null)
         };
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
     private static string NormalizePath(string path)
     {
         var segs = path.Split('/', StringSplitOptions.RemoveEmptyEntries);

@@ -18,7 +18,7 @@ namespace ReqRepTransformation.Core.Pipeline;
 ///    - detail.HasExplicitFailureMode == false → _options.DefaultFailureMode
 /// 3. Checks circuit breaker before each transform.
 /// 4. Wraps each transform with a per-transform linked CancellationTokenSource timeout.
-/// 5. Enforces IBufferTransform vs IStreamTransform payload compatibility.
+/// 5. Enforces IBufferTransformer vs IStreamTransformer payload compatibility.
 /// 6. Handles FailureMode: StopPipeline / Continue / LogAndSkip.
 /// 7. Emits [LoggerMessage] structured logs and OpenTelemetry spans per transform.
 /// 8. Records circuit breaker success/failure after each execution.
@@ -167,7 +167,7 @@ public sealed class PipelineExecutor
         var transform = entry.Transform;
 
         // ── 1. Payload / type compatibility ───────────────────────
-        if (transform is IBufferTransform && context.Payload.IsStreaming)
+        if (transform is IBufferTransformer && context.Payload.IsStreaming)
         {
             _logger.BufferTransformStreamAccessViolation(transform.Name);
             return;
@@ -256,7 +256,7 @@ public sealed class PipelineExecutor
     private ValueTask HandleFailureAsync(
         IMessageContext  context,
         FailureMode      mode,
-        ITransformation  transform,
+        ITransformer  transform,
         string           sideLabel,
         Exception        ex)
     {
@@ -274,7 +274,7 @@ public sealed class PipelineExecutor
     private ValueTask HandleCircuitOpenAsync(
         IMessageContext  context,
         FailureMode      mode,
-        ITransformation  transform,
+        ITransformer  transform,
         string           sideLabel)
     {
         if (mode == FailureMode.StopPipeline)

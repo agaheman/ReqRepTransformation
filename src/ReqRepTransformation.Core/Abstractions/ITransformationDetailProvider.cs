@@ -3,26 +3,20 @@ using ReqRepTransformation.Core.Models;
 namespace ReqRepTransformation.Core.Abstractions;
 
 /// <summary>
-/// Single point of truth for resolving which transformations apply to a given request.
-/// Implementations may load configuration from appsettings.json, a database, Redis cache,
-/// feature flags, or any other source. The pipeline calls this exactly once per request.
+/// Resolves the <see cref="TransformationDetail"/> for each incoming request.
 ///
-/// Implementations are expected to cache aggressively (by method + path) to avoid
-/// repeated I/O on every request.
+/// Implementation contract:
+///   1. Load a list of <see cref="RouteTransformerEntry"/> records — typically from a DB —
+///      via <c>GetCurrentRouteTransformers(method, path)</c>.
+///   2. For each entry, resolve the <c>ITransformer</c> keyed service using
+///      <see cref="RouteTransformerEntry.TransformerKey"/> and pass
+///      <see cref="RouteTransformerEntry.ParamsJson"/> to it.
+///   3. Build and return a <see cref="TransformationDetail"/>.
+///
+/// Cache aggressively by method + normalized path (replace numeric/GUID segments with {id}).
 /// </summary>
 public interface ITransformationDetailProvider
 {
-    /// <summary>
-    /// Resolves the transformation detail for the given message context.
-    /// Called at the very start of the pipeline, before any transform executes.
-    /// </summary>
-    /// <param name="context">The incoming message context (method, path, headers available).</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>
-    /// A <see cref="TransformationDetail"/> describing which transforms to apply,
-    /// in what order, with what timeout and failure mode.
-    /// Return <see cref="TransformationDetail.Empty"/> to pass through with no transforms.
-    /// </returns>
     ValueTask<TransformationDetail> GetTransformationDetailAsync(
         IMessageContext context,
         CancellationToken ct = default);

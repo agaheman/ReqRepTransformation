@@ -7,15 +7,10 @@
     <LangVersion>13</LangVersion>
     <AssemblyName>SampleApiTestApp</AssemblyName>
     <RootNamespace>SampleApiTestApp</RootNamespace>
-    <Description>Sample ASP.NET Core 9 API demonstrating ReqRepTransformation pipeline.</Description>
+    <Description>Sample ASP.NET Core 9 API demonstrating the ReqRepTransformation pipeline with keyed DI transformers.</Description>
     <UserSecretsId>sample-api-test-app</UserSecretsId>
   </PropertyGroup>
-  
-  <PropertyGroup Condition="'$(Configuration)'=='Debug'">
-    <DebugSymbols>true</DebugSymbols>
-    <Optimize>false</Optimize>
-  </PropertyGroup>
-  
+
   <ItemGroup>
     <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.0" />
     <PackageReference Include="OpenTelemetry.Extensions.Hosting"              Version="1.9.0" />
@@ -27,7 +22,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\ReqRepTransformation.Core\ReqRepTransformation.Core.csproj" />
     <ProjectReference Include="..\..\src\ReqRepTransformation.AspNetCore\ReqRepTransformation.AspNetCore.csproj" />
-    <ProjectReference Include="..\..\src\ReqRepTransformation.Transforms\ReqRepTransformation.Transforms.csproj" />
+    <ProjectReference Include="..\..\src\ReqRepTransformation.BuiltInTransformers\ReqRepTransformation.BuiltInTransformers.csproj" />
   </ItemGroup>
 
 </Project>

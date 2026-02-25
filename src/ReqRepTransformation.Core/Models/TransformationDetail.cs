@@ -3,11 +3,11 @@ using ReqRepTransformation.Core.Abstractions;
 namespace ReqRepTransformation.Core.Models;
 
 /// <summary>
-/// Wraps a single ITransformation with its execution order within a pipeline side.
+/// Wraps a single ITransformer with its execution order within a pipeline side.
 ///
 /// Design rationale:
-/// Order does NOT live on ITransformation itself, because:
-///   1. The same transform instance (e.g. CorrelationIdTransform) may be registered
+/// Order does NOT live on ITransformer itself, because:
+///   1. The same transformer instance (e.g. CorrelationIdTransformer) may be registered
 ///      on multiple routes with different orders — it must remain stateless and reusable.
 ///   2. Order is a pipeline-configuration concern, not a transform behavior concern.
 ///      Keeping them separate respects SRP.
@@ -26,9 +26,9 @@ public sealed record TransformEntry
     public int Order { get; init; }
 
     /// <summary>The transform to execute at this position.</summary>
-    public ITransformation Transform { get; init; }
+    public ITransformer Transform { get; init; }
 
-    public TransformEntry(int order, ITransformation transform)
+    public TransformEntry(int order, ITransformer transform)
     {
         ArgumentNullException.ThrowIfNull(transform);
         Order     = order;
@@ -36,7 +36,7 @@ public sealed record TransformEntry
     }
 
     /// <summary>Convenience factory: new TransformEntry(order, transform).</summary>
-    public static TransformEntry At(int order, ITransformation transform)
+    public static TransformEntry At(int order, ITransformer transform)
         => new(order, transform);
 }
 
