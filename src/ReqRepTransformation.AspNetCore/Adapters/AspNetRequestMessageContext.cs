@@ -55,8 +55,8 @@ internal sealed class AspNetRequestMessageContext : MessageContextBase
         }
     }
 
-    public override IMessageHeaders Headers => _headers;
-    public override IPayload Payload => _payload;
+    public override IMessageHeaders Headers   => _headers;
+    protected override PayloadContext PayloadCore => _payload;
 
     // ──────────────────────────────────────────────────────────────
     // Helpers

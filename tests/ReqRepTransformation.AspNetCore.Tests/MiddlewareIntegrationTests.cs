@@ -185,7 +185,7 @@ public sealed class GatewayTransformMiddlewareTests
         public void Configure(TransformerParams @params) { /* no params */ }
         public bool ShouldApply(IMessageContext _) => true;
 
-        public ValueTask ApplyAsync(IMessageContext _, CancellationToken ct)
+        public ValueTask ApplyAsync(IBufferMessageContext _, CancellationToken ct)
         {
             _list.Add(_id);
             return ValueTask.CompletedTask;

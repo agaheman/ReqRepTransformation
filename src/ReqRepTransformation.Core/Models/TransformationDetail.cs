@@ -13,19 +13,17 @@ namespace ReqRepTransformation.Core.Models;
 ///      Keeping them separate respects SRP.
 ///
 /// PipelineExecutor sorts TransformEntry collections by Order ASC before execution.
-/// Recommended convention: use multiples of 10 (10, 20, 30 ...) to leave room for
-/// insertion without renumbering all entries.
+/// Convention: use multiples of 10 (10, 20, 30 ...) to leave room for insertion.
 /// </summary>
 public sealed record TransformEntry
 {
     /// <summary>
-    /// Ascending execution order within the pipeline side (request or response).
+    /// Ascending execution order within the pipeline side.
     /// Lower numbers execute first. Ties are broken by list insertion order.
-    /// Convention: use multiples of 10 (10, 20, 30...) for easy reordering.
     /// </summary>
     public int Order { get; init; }
 
-    /// <summary>The transform to execute at this position.</summary>
+    /// <summary>The transformer to execute at this position.</summary>
     public ITransformer Transform { get; init; }
 
     public TransformEntry(int order, ITransformer transform)
@@ -35,7 +33,7 @@ public sealed record TransformEntry
         Transform = transform;
     }
 
-    /// <summary>Convenience factory: new TransformEntry(order, transform).</summary>
+    /// <summary>Convenience factory.</summary>
     public static TransformEntry At(int order, ITransformer transform)
         => new(order, transform);
 }
@@ -44,108 +42,72 @@ public sealed record TransformEntry
 /// Resolved per-request transformation configuration.
 /// Returned by ITransformationDetailProvider and consumed by PipelineExecutor.
 ///
-/// PipelineExecutor applies these fallback rules using PipelineOptions:
+/// Fallback rules applied by PipelineExecutor:
 ///   - TransformationTimeout == TimeSpan.Zero → PipelineOptions.DefaultTimeout
 ///   - HasExplicitFailureMode == false        → PipelineOptions.DefaultFailureMode
-///     (guards against DB rows with a NULL failure_mode defaulting to StopPipeline = 0)
-///
-/// Transforms are executed in ascending Order within each side.
 /// </summary>
 public sealed record TransformationDetail
 {
-    /// <summary>
-    /// Ordered transform entries for the request side (before forwarding downstream).
-    /// PipelineExecutor sorts by TransformEntry.Order ASC before execution.
-    /// </summary>
+    /// <summary>Request-side transform entries. Sorted by Order ASC before execution.</summary>
     public IReadOnlyList<TransformEntry> RequestTransformations { get; init; }
         = Array.Empty<TransformEntry>();
 
-    /// <summary>
-    /// Ordered transform entries for the response side (after receiving downstream response).
-    /// PipelineExecutor sorts by TransformEntry.Order ASC before execution.
-    /// </summary>
+    /// <summary>Response-side transform entries. Sorted by Order ASC before execution.</summary>
     public IReadOnlyList<TransformEntry> ResponseTransformations { get; init; }
         = Array.Empty<TransformEntry>();
 
     /// <summary>
-    /// Per-transform execution timeout for all transforms on this route.
-    /// Zero (default) → PipelineExecutor falls back to PipelineOptions.DefaultTimeout.
+    /// Per-transform timeout for this route.
+    /// Zero → falls back to PipelineOptions.DefaultTimeout.
     /// </summary>
     public TimeSpan TransformationTimeout { get; init; } = TimeSpan.Zero;
 
-    /// <summary>
-    /// Failure handling mode for this route.
-    /// Only respected when HasExplicitFailureMode is true.
-    /// Otherwise PipelineExecutor uses PipelineOptions.DefaultFailureMode.
-    /// </summary>
+    /// <summary>Failure handling mode for this route (see HasExplicitFailureMode).</summary>
     public FailureMode FailureMode { get; init; } = FailureMode.LogAndSkip;
 
     /// <summary>
-    /// Set to true when FailureMode is intentionally configured (not just the enum default).
-    /// Prevents a DB row with a NULL failure_mode column from silently becoming StopPipeline.
-    /// In-code providers: always set this to true when specifying a FailureMode.
+    /// Must be true for FailureMode to take effect.
+    /// Guards against the StopPipeline enum default (= 0) being silently applied
+    /// to routes that never set a failure mode.
     /// </summary>
     public bool HasExplicitFailureMode { get; init; } = false;
 
     /// <summary>
-    /// When true, independent (non-JSON-mutating) transforms on the same side
-    /// are executed concurrently via Task.WhenAll.
-    /// WARNING: Do NOT enable for routes that contain JSON-mutating transforms —
-    /// concurrent JsonNode mutation is not thread-safe.
-    /// Defaults to false (sequential, safe for all transform types).
+    /// When true, header/address transforms on the same side run concurrently via Task.WhenAll.
+    /// WARNING: never enable for routes containing JSON-mutating transforms — JsonNode is not
+    /// thread-safe for concurrent writes.
     /// </summary>
     public bool AllowParallelNonDependentTransforms { get; init; } = false;
 
-    /// <summary>Pass-through detail: no transforms applied, global defaults used.</summary>
+    /// <summary>Pass-through: no transforms applied, global defaults used.</summary>
     public static TransformationDetail Empty { get; } = new();
 }
 
 /// <summary>
-/// Governs what happens when an individual transform throws or its circuit breaker is open.
+/// Governs what happens when a transform throws or times out.
 /// </summary>
 public enum FailureMode
 {
-    /// <summary>
-    /// Abort the entire pipeline immediately by throwing TransformationException.
-    /// Appropriate for payment flows or any route where partial transformation is dangerous.
-    /// </summary>
+    /// <summary>Abort the entire pipeline immediately (throws TransformationException).</summary>
     StopPipeline = 0,
 
-    /// <summary>Log the error and continue to the next transform in the pipeline.</summary>
+    /// <summary>Log the error and continue to the next transform.</summary>
     Continue = 1,
 
-    /// <summary>
-    /// Log a warning, skip only the failing transform, and continue.
-    /// Recommended production default — safe and observable.
-    /// </summary>
+    /// <summary>Log a warning, skip only the failing transform, continue. Recommended default.</summary>
     LogAndSkip = 2
 }
 
-/// <summary>Indicates which side of the HTTP exchange a message context represents.</summary>
+/// <summary>Which side of the HTTP exchange the context represents.</summary>
 public enum MessageSide
 {
     Request  = 0,
     Response = 1
 }
 
-/// <summary>Configuration options for the sliding-window circuit breaker.</summary>
-public sealed record CircuitBreakerOptions
-{
-    /// <summary>Number of recent executions tracked in the sliding window. Default: 20.</summary>
-    public int WindowSize { get; init; } = 20;
-
-    /// <summary>
-    /// Failure fraction that opens the circuit (0.0–1.0). Default: 0.5 (50%).
-    /// </summary>
-    public double FailureRatioThreshold { get; init; } = 0.50;
-
-    /// <summary>How long the circuit stays open before transitioning to HalfOpen. Default: 30s.</summary>
-    public TimeSpan OpenDuration { get; init; } = TimeSpan.FromSeconds(30);
-}
-
 /// <summary>
 /// Global pipeline configuration. Bind from appsettings.json under "ReqRepTransformation".
-/// Values are used as fallbacks when TransformationDetail does not specify them explicitly.
+/// Values act as fallbacks when TransformationDetail does not specify them.
 /// </summary>
 public sealed class PipelineOptions
 {
@@ -161,21 +123,25 @@ public sealed class PipelineOptions
     /// <summary>
     /// Global failure mode fallback.
     /// Applied when TransformationDetail.HasExplicitFailureMode is false.
-    /// Default: LogAndSkip (production-safe — never crashes the pipeline on transform failure).
+    /// Default: LogAndSkip.
     /// </summary>
     public FailureMode DefaultFailureMode { get; set; } = FailureMode.LogAndSkip;
 
-    /// <summary>Circuit breaker configuration applied globally to all transforms.</summary>
-    public CircuitBreakerOptions CircuitBreaker { get; set; } = new();
+    // ── Note on resilience ────────────────────────────────────────────────────
+    // Circuit breaking, retries, and bulkhead isolation are NOT configured here.
+    // Apply them at the outbound HttpClient level via Polly or
+    // Microsoft.Extensions.Http.Resilience. This keeps transform concerns separate
+    // from transport-level resilience concerns (SRP).
+    // ─────────────────────────────────────────────────────────────────────────
 
-    /// <summary>Header keys whose values are redacted in all logs and OTEL traces.</summary>
+    /// <summary>Header keys redacted in all logs and OTEL traces.</summary>
     public IList<string> RedactedHeaderKeys { get; set; } = new List<string>
     {
         "Authorization", "Cookie", "Set-Cookie",
         "X-Api-Key", "X-Client-Secret", "X-Api-Secret", "X-Internal-Token"
     };
 
-    /// <summary>Query string parameter names whose values are redacted in logs and traces.</summary>
+    /// <summary>Query string keys redacted in logs and traces.</summary>
     public IList<string> RedactedQueryKeys { get; set; } = new List<string>
     {
         "access_token", "api_key", "token", "secret"

@@ -1,7 +1,6 @@
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using NSubstitute;
 using ReqRepTransformation.Core.Abstractions;
 using ReqRepTransformation.Core.Models;
 using ReqRepTransformation.Core.Pipeline;
@@ -15,14 +14,10 @@ public sealed class PipelineExecutorTests
     // ── Factory helpers ───────────────────────────────────────────────────────
 
     private static PipelineExecutor CreateExecutor(
-        ITransformCircuitBreaker? breaker     = null,
-        FailureMode               failureMode = FailureMode.LogAndSkip)
+        FailureMode failureMode = FailureMode.LogAndSkip)
     {
-        breaker ??= Substitute.For<ITransformCircuitBreaker>();
-        breaker.IsOpen(Arg.Any<string>()).Returns(false);
-
         var options = Options.Create(new PipelineOptions { DefaultFailureMode = failureMode });
-        return new PipelineExecutor(breaker, options, NullLogger<PipelineExecutor>.Instance);
+        return new PipelineExecutor(options, NullLogger<PipelineExecutor>.Instance);
     }
 
     private static TransformationDetail RequestDetail(
@@ -43,7 +38,6 @@ public sealed class PipelineExecutorTests
         var context   = MessageContextFake.Create();
         var callOrder = new List<int>();
 
-        // Registered in reverse order — executor must sort by Order ASC
         var detail = RequestDetail(new[]
         {
             TransformEntry.At(30, new TrackingTransformer(3, callOrder)),
@@ -53,7 +47,7 @@ public sealed class PipelineExecutorTests
 
         await executor.ExecuteRequestAsync(context, detail);
 
-        callOrder.Should().Equal(1, 2, 3); // sorted: 10 -> 20 -> 30
+        callOrder.Should().Equal(1, 2, 3);
     }
 
     [Fact]
@@ -72,7 +66,7 @@ public sealed class PipelineExecutorTests
 
         await executor.ExecuteRequestAsync(context, detail);
 
-        callOrder[2].Should().Be(3); // Order=20 always last
+        callOrder[2].Should().Be(3);
     }
 
     // ── ShouldApply ───────────────────────────────────────────────────────────
@@ -144,49 +138,20 @@ public sealed class PipelineExecutorTests
     [Fact]
     public async Task ExecuteRequestAsync_UsesGlobalDefaultFailureMode_WhenNotExplicit()
     {
-        var options = Options.Create(new PipelineOptions
-        {
-            DefaultFailureMode = FailureMode.StopPipeline
-        });
-        var breaker = Substitute.For<ITransformCircuitBreaker>();
-        breaker.IsOpen(Arg.Any<string>()).Returns(false);
-        var executor = new PipelineExecutor(breaker, options, NullLogger<PipelineExecutor>.Instance);
+        var executor = new PipelineExecutor(
+            Options.Create(new PipelineOptions { DefaultFailureMode = FailureMode.StopPipeline }),
+            NullLogger<PipelineExecutor>.Instance);
 
         var context = MessageContextFake.Create();
         var detail  = new TransformationDetail
         {
             RequestTransformations = new[] { TransformEntry.At(10, new ThrowingTransformer("x")) },
-            HasExplicitFailureMode = false  // must use global default (StopPipeline)
+            HasExplicitFailureMode = false
         };
 
         await FluentActions
             .Awaiting(() => executor.ExecuteRequestAsync(context, detail).AsTask())
             .Should().ThrowAsync<TransformationException>();
-    }
-
-    // ── Circuit breaker ───────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task ExecuteRequestAsync_SkipsTransform_WhenCircuitOpen_LogAndSkip()
-    {
-        var breaker = Substitute.For<ITransformCircuitBreaker>();
-        breaker.IsOpen("guarded").Returns(true);
-
-        var executor = CreateExecutor(breaker, FailureMode.LogAndSkip);
-        var context  = MessageContextFake.Create();
-        var called   = false;
-
-        var detail = RequestDetail(new[]
-        {
-            TransformEntry.At(10, new ConditionalTransformer(
-                shouldApply: _ => true,
-                apply: _ => { called = true; return ValueTask.CompletedTask; },
-                name: "guarded"))
-        }, FailureMode.LogAndSkip);
-
-        await executor.ExecuteRequestAsync(context, detail);
-
-        called.Should().BeFalse();
     }
 
     // ── Empty pipeline ────────────────────────────────────────────────────────
@@ -207,7 +172,6 @@ public sealed class PipelineExecutorTests
     [Fact]
     public async Task ExecuteRequestAsync_ReadsParamsJson_AfterConfigure()
     {
-        // Verifies Configure() is honoured: a transformer reads its params and uses them in ApplyAsync.
         var executor     = CreateExecutor();
         var context      = MessageContextFake.Create();
         string? captured = null;
@@ -222,8 +186,34 @@ public sealed class PipelineExecutorTests
         captured.Should().Be("X-Test-Header");
     }
 
+    // ── Issue 1: compile-time payload discipline ──────────────────────────────
+    // IBufferTransformer.ApplyAsync receives IBufferMessageContext — only buffered
+    // payload methods (GetJsonAsync, GetBufferAsync) exist on that type.
+    // IStreamTransformer.ApplyAsync receives IStreamMessageContext — only
+    // GetPipeReaderAsync exists on that type.
+    // The typed dispatch in PipelineExecutor.DispatchApplyAsync enforces this.
+
+    [Fact]
+    public async Task ExecuteRequestAsync_DispatchesTypedBufferContext_ToBufferTransformer()
+    {
+        var executor  = CreateExecutor();
+        var context   = MessageContextFake.Create();
+        IBufferMessageContext? received = null;
+
+        var transformer = new ContextCapturingTransformer(ctx => received = ctx);
+        var detail      = RequestDetail(new[] { TransformEntry.At(10, transformer) });
+
+        await executor.ExecuteRequestAsync(context, detail);
+
+        // Transformer received a narrowed IBufferMessageContext — not the raw IMessageContext.
+        // Payload is typed as IBufferPayload: GetPipeReaderAsync does not exist on it.
+        received.Should().NotBeNull();
+        received.Should().BeAssignableTo<IBufferMessageContext>();
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
-    // Test doubles — implement IBufferTransformer + Configure(TransformerParams)
+    // Test doubles
+    // All implement IBufferTransformer with the correct typed ApplyAsync signature.
     // ─────────────────────────────────────────────────────────────────────────
 
     private sealed class TrackingTransformer : IBufferTransformer
@@ -237,7 +227,7 @@ public sealed class PipelineExecutorTests
         public void Configure(TransformerParams @params) { }
         public bool ShouldApply(IMessageContext _) => true;
 
-        public ValueTask ApplyAsync(IMessageContext _, CancellationToken ct)
+        public ValueTask ApplyAsync(IBufferMessageContext _, CancellationToken ct)
         {
             _order.Add(_id);
             return ValueTask.CompletedTask;
@@ -246,13 +236,13 @@ public sealed class PipelineExecutorTests
 
     private sealed class ConditionalTransformer : IBufferTransformer
     {
-        private readonly Func<IMessageContext, bool>      _shouldApply;
-        private readonly Func<IMessageContext, ValueTask> _apply;
+        private readonly Func<IMessageContext, bool>                _shouldApply;
+        private readonly Func<IBufferMessageContext, ValueTask>     _apply;
 
         public ConditionalTransformer(
-            Func<IMessageContext, bool>      shouldApply,
-            Func<IMessageContext, ValueTask> apply,
-            string?                          name = null)
+            Func<IMessageContext, bool>            shouldApply,
+            Func<IBufferMessageContext, ValueTask> apply,
+            string?                                name = null)
         {
             _shouldApply = shouldApply;
             _apply       = apply;
@@ -262,7 +252,7 @@ public sealed class PipelineExecutorTests
         public string Name { get; }
         public void Configure(TransformerParams @params) { }
         public bool ShouldApply(IMessageContext ctx) => _shouldApply(ctx);
-        public ValueTask ApplyAsync(IMessageContext ctx, CancellationToken ct) => _apply(ctx);
+        public ValueTask ApplyAsync(IBufferMessageContext ctx, CancellationToken ct) => _apply(ctx);
     }
 
     private sealed class ThrowingTransformer : IBufferTransformer
@@ -273,11 +263,10 @@ public sealed class PipelineExecutorTests
         public void Configure(TransformerParams @params) { }
         public bool ShouldApply(IMessageContext _) => true;
 
-        public ValueTask ApplyAsync(IMessageContext _, CancellationToken ct)
+        public ValueTask ApplyAsync(IBufferMessageContext _, CancellationToken ct)
             => throw new InvalidOperationException($"Transform '{Name}' always fails.");
     }
 
-    /// <summary>Reads "headerName" param in Configure and exposes it in ApplyAsync.</summary>
     private sealed class CapturingTransformer : IBufferTransformer
     {
         private readonly Action<string?> _capture;
@@ -292,9 +281,27 @@ public sealed class PipelineExecutorTests
 
         public bool ShouldApply(IMessageContext _) => true;
 
-        public ValueTask ApplyAsync(IMessageContext _, CancellationToken ct)
+        public ValueTask ApplyAsync(IBufferMessageContext _, CancellationToken ct)
         {
             _capture(_headerName);
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class ContextCapturingTransformer : IBufferTransformer
+    {
+        private readonly Action<IBufferMessageContext> _capture;
+
+        public ContextCapturingTransformer(Action<IBufferMessageContext> capture)
+            => _capture = capture;
+
+        public string Name => "context-capturing";
+        public void Configure(TransformerParams @params) { }
+        public bool ShouldApply(IMessageContext _) => true;
+
+        public ValueTask ApplyAsync(IBufferMessageContext ctx, CancellationToken ct)
+        {
+            _capture(ctx);
             return ValueTask.CompletedTask;
         }
     }

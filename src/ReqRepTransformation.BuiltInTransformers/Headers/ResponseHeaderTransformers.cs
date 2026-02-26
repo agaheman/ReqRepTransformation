@@ -35,7 +35,7 @@ public sealed class RemoveInternalResponseHeadersTransformer : IBufferTransforme
     public bool ShouldApply(IMessageContext context)
         => context.Side == Core.Models.MessageSide.Response;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         for (int i = 0; i < _headers.Count; i++)
             context.Headers.Remove(_headers[i]);
@@ -60,7 +60,7 @@ public sealed class GatewayResponseTagTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Side == Core.Models.MessageSide.Response;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Set("X-Gateway-Version", _version);
         context.Headers.Set("X-Processed-By",    _instanceId);
@@ -83,7 +83,7 @@ public sealed class UploadMetadataHeaderTransformer : IStreamTransformer
         => context.Payload.IsStreaming
         && context.Method.Equals("POST", StringComparison.OrdinalIgnoreCase);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IStreamMessageContext context, CancellationToken ct)
     {
         context.Headers.Set("X-Upload-Gateway",   "reqrep/1.0");
         context.Headers.Set("X-Upload-Timestamp", DateTimeOffset.UtcNow.ToString("O"));

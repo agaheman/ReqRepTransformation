@@ -1,6 +1,4 @@
-using System.Buffers;
 using System.IO.Pipelines;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ReqRepTransformation.Core.Abstractions;
@@ -10,119 +8,124 @@ using ReqRepTransformation.Core.Models;
 namespace ReqRepTransformation.Core.Pipeline;
 
 /// <summary>
-/// Concrete implementation of IPayload.
+/// Concrete payload implementation.
+/// Implements both <see cref="IBufferPayload"/> and <see cref="IStreamPayload"/>
+/// so a single instance can be held by the adapter but presented to each
+/// transformer as the narrower typed interface.
 ///
-/// Zero-double-serialization guarantee:
-/// - _cachedJson is populated exactly once on first GetJsonAsync() call.
-/// - SetJsonAsync() replaces the reference in-memory.
-/// - FlushAsync() serializes the JsonNode exactly once at pipeline exit.
-/// - IsJsonDirty tracks whether any transform has touched the JSON,
-///   avoiding re-serialization if no transform mutated the body.
+/// Issue 4 fix — SemaphoreSlim replaced with Interlocked sentinel:
+///   The old <c>new SemaphoreSlim(1,1)</c> was per-instance (per-request), so it
+///   was NOT a cross-request throughput killer. However, SemaphoreSlim still has
+///   allocation cost, GC pressure, and async overhead on the contended path.
+///   Replaced with a lock-free double-checked pattern using Interlocked.CompareExchange
+///   on an int sentinel (_parseState: 0=unparsed, 1=parsing, 2=done).
+///   In the overwhelmingly common single-threaded pipeline case, the exchange
+///   succeeds immediately with zero allocation and zero async overhead.
+///   On the rare concurrent call (parallel transform mode), the second caller
+///   spins briefly with Task.Yield until the first parse completes.
 ///
-/// Thread-safety:
-/// - _jsonInitSemaphore(1,1) ensures only one concurrent JSON parse.
-/// - All other state is write-once or replaced atomically.
+/// Zero-double-serialization contract:
+///   - JSON parsed exactly once on first GetJsonAsync call.
+///   - All transforms share the same JsonNode reference — mutate in-place.
+///   - FlushAsync serialises to bytes exactly once at pipeline exit.
 /// </summary>
-public sealed class PayloadContext : IPayload, IAsyncDisposable
+public sealed class PayloadContext : IBufferPayload, IStreamPayload, IAsyncDisposable
 {
-    // ──────────────────────────────────────────────────────────────
-    // Fields
-    // ──────────────────────────────────────────────────────────────
+    // ── Parse state sentinel (Issue 4: replaces SemaphoreSlim) ───────────────
+    // 0 = not yet parsed, 1 = parse in progress, 2 = parse complete
+    private const int ParseUnstarted  = 0;
+    private const int ParseInProgress = 1;
+    private const int ParseDone       = 2;
+    private int _parseState = ParseUnstarted;
 
+    // ── Body state ────────────────────────────────────────────────────────────
     private readonly PipeReader? _pipeReader;
-    private readonly SemaphoreSlim _jsonInitSemaphore = new(1, 1);
-
-    private JsonNode? _cachedJson;
+    private JsonNode?            _cachedJson;
     private ReadOnlyMemory<byte> _buffer;
-    private Stream? _replacedStream;
-    private bool _isJsonDirty;
-    private bool _isBufferDirty;
-    private bool _pipeReaderConsumed;
+    private Stream?              _replacedStream;
+    private bool                 _isJsonDirty;
+    private bool                 _isBufferDirty;
+    private bool                 _pipeReaderConsumed;
 
-    // ──────────────────────────────────────────────────────────────
-    // Constructor
-    // ──────────────────────────────────────────────────────────────
+    // ── IPayload ──────────────────────────────────────────────────────────────
+    public bool     HasBody     { get; }
+    public bool     IsJson      { get; }
+    public bool     IsStreaming { get; }
+    public string?  ContentType { get; }
 
-    /// <param name="pipeReader">The PipeReader to read body from. Null for response bodies with no body.</param>
-    /// <param name="contentType">The raw Content-Type header value.</param>
-    /// <param name="hasBody">Whether the message has a body at all.</param>
-    public PayloadContext(
-        PipeReader? pipeReader,
-        string? contentType,
-        bool hasBody)
+    // ── Constructor ───────────────────────────────────────────────────────────
+
+    public PayloadContext(PipeReader? pipeReader, string? contentType, bool hasBody)
     {
         _pipeReader = pipeReader;
         ContentType = contentType;
-        HasBody = hasBody;
-        IsJson = hasBody && IsJsonContentType(contentType);
+        HasBody     = hasBody;
+        IsJson      = hasBody && IsJsonContentType(contentType);
         IsStreaming = hasBody && IsStreamingContentType(contentType);
     }
 
-    /// <summary>Creates a PayloadContext from an in-memory buffer (for response body or pre-buffered requests).</summary>
-    public static PayloadContext FromBuffer(
-        ReadOnlyMemory<byte> buffer,
-        string? contentType)
+    public static PayloadContext FromBuffer(ReadOnlyMemory<byte> buffer, string? contentType)
     {
         var ctx = new PayloadContext(null, contentType, buffer.Length > 0);
-        ctx._buffer = buffer;
-        ctx._pipeReaderConsumed = true; // no reader to consume
-        return ctx;
-    }
-
-    /// <summary>Creates a PayloadContext from an existing JsonNode (for tests or known-JSON responses).</summary>
-    public static PayloadContext FromJson(JsonNode node, string contentType = "application/json")
-    {
-        var ctx = new PayloadContext(null, contentType, true);
-        ctx._cachedJson = node;
+        ctx._buffer             = buffer;
         ctx._pipeReaderConsumed = true;
         return ctx;
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // IPayload implementation
-    // ──────────────────────────────────────────────────────────────
+    public static PayloadContext FromJson(JsonNode node, string contentType = "application/json")
+    {
+        var ctx = new PayloadContext(null, contentType, true);
+        ctx._cachedJson         = node;
+        ctx._pipeReaderConsumed = true;
+        ctx._parseState         = ParseDone;
+        return ctx;
+    }
 
-    public bool HasBody { get; }
-    public bool IsJson { get; }
-    public bool IsStreaming { get; }
-    public string? ContentType { get; }
+    // ── IBufferPayload ────────────────────────────────────────────────────────
 
     public async ValueTask<JsonNode?> GetJsonAsync(CancellationToken ct = default)
     {
         if (!IsJson)
             throw new PayloadAccessViolationException(
                 $"GetJsonAsync called on a non-JSON payload (Content-Type: {ContentType}). " +
-                $"Check IPayload.IsJson before calling this method.");
+                "Check IPayload.IsJson before calling this method.");
 
-        if (_cachedJson is not null)
+        // Fast path — already parsed (overwhelmingly the common case)
+        if (_parseState == ParseDone)
             return _cachedJson;
 
-        await _jsonInitSemaphore.WaitAsync(ct).ConfigureAwait(false);
-        try
+        // Lock-free double-checked: only one concurrent caller parses.
+        // In sequential pipeline mode this branch is never contended.
+        if (Interlocked.CompareExchange(ref _parseState, ParseInProgress, ParseUnstarted) == ParseUnstarted)
         {
-            // Double-check after acquiring semaphore
-            if (_cachedJson is not null)
-                return _cachedJson;
-
-            var buffer = await ReadPipeReaderToBufferAsync(ct).ConfigureAwait(false);
-
-            if (buffer.Length == 0)
+            try
             {
-                _cachedJson = null;
-                return null;
+                var buffer = await ReadPipeReaderToBufferAsync(ct).ConfigureAwait(false);
+
+                _cachedJson = buffer.Length == 0
+                    ? null
+                    : JsonNode.Parse(buffer.Span, documentOptions: new JsonDocumentOptions
+                    {
+                        AllowTrailingCommas = true,
+                        CommentHandling     = JsonCommentHandling.Skip
+                    });
             }
-
-            _cachedJson = JsonNode.Parse(buffer.Span, documentOptions: new JsonDocumentOptions
+            finally
             {
-                AllowTrailingCommas = true,
-                CommentHandling = JsonCommentHandling.Skip
-            });
-            return _cachedJson;
+                // Publish result — makes _cachedJson visible to all subsequent readers
+                Volatile.Write(ref _parseState, ParseDone);
+            }
         }
-        finally
+        else
         {
-            _jsonInitSemaphore.Release();
+            // Another concurrent call is parsing — spin with yields until done.
+            // This only occurs in AllowParallelNonDependentTransforms mode, which
+            // the docs explicitly warn against for JSON-mutating transforms.
+            while (Volatile.Read(ref _parseState) != ParseDone)
+                await Task.Yield();
         }
+
+        return _cachedJson;
     }
 
     public async ValueTask<ReadOnlyMemory<byte>> GetBufferAsync(CancellationToken ct = default)
@@ -139,46 +142,24 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
         return _buffer;
     }
 
-    public ValueTask<PipeReader> GetPipeReaderAsync(CancellationToken ct = default)
-    {
-        if (!IsStreaming && _pipeReader is null)
-            throw new PayloadAccessViolationException(
-                "GetPipeReaderAsync called but no PipeReader is available. " +
-                "This payload is a buffered type — use GetBufferAsync() or GetJsonAsync().");
-
-        return ValueTask.FromResult(_pipeReader!);
-    }
-
     public ValueTask SetJsonAsync(JsonNode node, CancellationToken ct = default)
     {
-        _cachedJson = node;
-        _isJsonDirty = true;
-        // Clear any cached buffer — JSON is now the source of truth
-        _buffer = ReadOnlyMemory<byte>.Empty;
+        _cachedJson   = node;
+        _isJsonDirty  = true;
+        _buffer       = ReadOnlyMemory<byte>.Empty;
+        Volatile.Write(ref _parseState, ParseDone);
         return ValueTask.CompletedTask;
     }
 
     public ValueTask SetBufferAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
     {
-        _buffer = buffer;
+        _buffer        = buffer;
         _isBufferDirty = true;
-        // Invalidate cached JSON — buffer is now the source of truth
-        _cachedJson = null;
+        _cachedJson    = null;
+        Volatile.Write(ref _parseState, ParseUnstarted);
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask ReplaceStreamAsync(Stream stream, CancellationToken ct = default)
-    {
-        _replacedStream = stream;
-        return ValueTask.CompletedTask;
-    }
-
-    /// <summary>
-    /// Serializes the current state to bytes for writing to the wire.
-    /// Called ONCE at pipeline exit. Never called by transforms.
-    ///
-    /// Priority: ReplacedStream > DirtyJson > DirtyBuffer > Original Buffer.
-    /// </summary>
     public async ValueTask<ReadOnlyMemory<byte>> FlushAsync(CancellationToken ct = default)
     {
         if (_replacedStream is not null)
@@ -190,7 +171,7 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
 
         if (_isJsonDirty && _cachedJson is not null)
         {
-            using var ms = PooledMemoryManager.GetStream("reqrep-flush-json");
+            using var ms     = PooledMemoryManager.GetStream("reqrep-flush-json");
             using var writer = new Utf8JsonWriter(ms, new JsonWriterOptions { Indented = false });
             _cachedJson.WriteTo(writer);
             await writer.FlushAsync(ct).ConfigureAwait(false);
@@ -200,12 +181,9 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
         if (_isBufferDirty && _buffer.Length > 0)
             return _buffer;
 
-        // If we have a cached buffer from original read, return it
         if (_buffer.Length > 0)
             return _buffer;
 
-        // Nothing mutated — return the original body by re-reading
-        // (This path only reached when FlushAsync is called but no transform touched body)
         if (_pipeReader is not null && !_pipeReaderConsumed)
         {
             _buffer = await ReadPipeReaderToBufferAsync(ct).ConfigureAwait(false);
@@ -215,9 +193,25 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
         return ReadOnlyMemory<byte>.Empty;
     }
 
-    // ──────────────────────────────────────────────────────────────
-    // Private helpers
-    // ──────────────────────────────────────────────────────────────
+    // ── IStreamPayload ────────────────────────────────────────────────────────
+
+    public ValueTask<PipeReader> GetPipeReaderAsync(CancellationToken ct = default)
+    {
+        if (!IsStreaming && _pipeReader is null)
+            throw new PayloadAccessViolationException(
+                "GetPipeReaderAsync called but no PipeReader is available. " +
+                "This payload is buffered — use GetBufferAsync() or GetJsonAsync().");
+
+        return ValueTask.FromResult(_pipeReader!);
+    }
+
+    public ValueTask ReplaceStreamAsync(Stream stream, CancellationToken ct = default)
+    {
+        _replacedStream = stream;
+        return ValueTask.CompletedTask;
+    }
+
+    // ── Private helpers ───────────────────────────────────────────────────────
 
     private async ValueTask<ReadOnlyMemory<byte>> ReadPipeReaderToBufferAsync(CancellationToken ct)
     {
@@ -231,12 +225,12 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
             while (true)
             {
                 var result = await _pipeReader.ReadAsync(ct).ConfigureAwait(false);
-                var readBuffer = result.Buffer;
+                var buffer = result.Buffer;
 
-                foreach (var segment in readBuffer)
+                foreach (var segment in buffer)
                     ms.Write(segment.Span);
 
-                _pipeReader.AdvanceTo(readBuffer.End);
+                _pipeReader.AdvanceTo(buffer.End);
 
                 if (result.IsCompleted || result.IsCanceled)
                     break;
@@ -251,31 +245,30 @@ public sealed class PayloadContext : IPayload, IAsyncDisposable
         return _buffer;
     }
 
-    private static bool IsJsonContentType(string? contentType)
+    private static bool IsJsonContentType(string? ct)
     {
-        if (contentType is null) return false;
-        var span = contentType.AsSpan();
-        return span.StartsWith("application/json", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("application/graphql", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("application/ndjson", StringComparison.OrdinalIgnoreCase);
+        if (ct is null) return false;
+        var s = ct.AsSpan();
+        return s.StartsWith("application/json",     StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("application/graphql",  StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("application/ndjson",   StringComparison.OrdinalIgnoreCase);
     }
 
-    private static bool IsStreamingContentType(string? contentType)
+    private static bool IsStreamingContentType(string? ct)
     {
-        if (contentType is null) return false;
-        var span = contentType.AsSpan();
-        return span.StartsWith("application/octet-stream", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("multipart/", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("application/grpc", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("application/protobuf", StringComparison.OrdinalIgnoreCase)
-            || span.StartsWith("application/vnd.google.protobuf", StringComparison.OrdinalIgnoreCase);
+        if (ct is null) return false;
+        var s = ct.AsSpan();
+        return s.StartsWith("application/octet-stream",          StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("multipart/",                        StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("application/grpc",                  StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("application/protobuf",              StringComparison.OrdinalIgnoreCase)
+            || s.StartsWith("application/vnd.google.protobuf",   StringComparison.OrdinalIgnoreCase);
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        _jsonInitSemaphore.Dispose();
-
         if (_replacedStream is not null)
-            await _replacedStream.DisposeAsync().ConfigureAwait(false);
+            return _replacedStream.DisposeAsync();
+        return ValueTask.CompletedTask;
     }
 }

@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using ReqRepTransformation.Core.Abstractions;
-using ReqRepTransformation.Core.Infrastructure.CircuitBreaker;
 using ReqRepTransformation.Core.Infrastructure.Redaction;
 using ReqRepTransformation.Core.Models;
 using ReqRepTransformation.Core.Pipeline;
@@ -15,15 +14,17 @@ public static class CoreServiceCollectionExtensions
 {
     /// <summary>
     /// Registers all core ReqRepTransformation services:
-    /// - PipelineExecutor
-    /// - TransformationPipeline (IMessageTransformationPipeline)
-    /// - SlidingWindowCircuitBreaker (ITransformCircuitBreaker)
-    /// - DefaultRedactionPolicy (IRedactionPolicy)
-    /// - PipelineOptions from configuration
+    /// <list type="bullet">
+    ///   <item><see cref="PipelineExecutor"/> — singleton, stateless after options resolved.</item>
+    ///   <item><see cref="IMessageTransformationPipeline"/> → <see cref="TransformationPipeline"/> — singleton.</item>
+    ///   <item><see cref="IRedactionPolicy"/> → <see cref="DefaultRedactionPolicy"/> — singleton.</item>
+    ///   <item><see cref="PipelineOptions"/> bound from configuration section "ReqRepTransformation".</item>
+    /// </list>
     ///
     /// <para>
-    /// Call this first, then optionally AddReqRepAspNet() or add transforms manually.
-    /// Register your ITransformationDetailProvider after this call.
+    /// Resilience (retry, circuit-breaking) is intentionally omitted from this layer.
+    /// It belongs at the HTTP-client boundary — use Polly or
+    /// <c>Microsoft.Extensions.Http.Resilience</c> on the outbound <see cref="HttpClient"/>.
     /// </para>
     /// </summary>
     public static IServiceCollection AddReqRepTransformationCore(
@@ -32,7 +33,6 @@ public static class CoreServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        // Options
         var optionsBuilder = services
             .AddOptions<PipelineOptions>()
             .BindConfiguration(PipelineOptions.SectionName);
@@ -40,11 +40,7 @@ public static class CoreServiceCollectionExtensions
         if (configure is not null)
             optionsBuilder.PostConfigure(configure);
 
-        // Infrastructure — singleton, thread-safe
-        services.TryAddSingleton<ITransformCircuitBreaker, SlidingWindowCircuitBreaker>();
         services.TryAddSingleton<IRedactionPolicy, DefaultRedactionPolicy>();
-
-        // Pipeline — singleton (stateless once options resolved)
         services.TryAddSingleton<PipelineExecutor>();
         services.TryAddSingleton<IMessageTransformationPipeline, TransformationPipeline>();
 

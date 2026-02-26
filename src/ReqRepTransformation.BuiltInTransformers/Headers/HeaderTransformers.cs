@@ -33,7 +33,7 @@ public sealed class AddHeaderTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => _overwrite || !context.Headers.Contains(_key);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Set(_key, _value);
         return ValueTask.CompletedTask;
@@ -53,7 +53,7 @@ public sealed class RemoveHeaderTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Headers.Contains(_key);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Remove(_key);
         return ValueTask.CompletedTask;
@@ -77,7 +77,7 @@ public sealed class RenameHeaderTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Headers.Contains(_fromKey);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         if (context.Headers.TryGet(_fromKey, out var value) && value is not null)
         {
@@ -104,7 +104,7 @@ public sealed class AppendHeaderTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => true;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Append(_key, _value);
         return ValueTask.CompletedTask;
@@ -130,7 +130,7 @@ public sealed class CorrelationIdTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => !context.Headers.Contains(_headerName);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Set(_headerName, Guid.NewGuid().ToString("N"));
         return ValueTask.CompletedTask;
@@ -148,7 +148,7 @@ public sealed class RequestIdTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => true;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         if (!context.Headers.Contains(RequestIdHeader))
             context.Headers.Set(RequestIdHeader, Guid.NewGuid().ToString("N"));

@@ -52,8 +52,8 @@ internal sealed class AspNetResponseMessageContext : MessageContextBase
         set => _address = value; // Allowed for inspection; does not affect actual response routing
     }
 
-    public override IMessageHeaders Headers => _headers;
-    public override IPayload Payload => _payload;
+    public override IMessageHeaders Headers      => _headers;
+    protected override PayloadContext PayloadCore => _payload;
 
     /// <summary>Returns the flushed response body after transforms have run.</summary>
     public ValueTask<ReadOnlyMemory<byte>> GetFinalBodyAsync(CancellationToken ct)

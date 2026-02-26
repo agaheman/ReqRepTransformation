@@ -7,78 +7,114 @@ using ReqRepTransformation.Core.Pipeline;
 
 namespace ReqRepTransformation.Core.Tests.Fakes;
 
-public sealed class MessageContextFake : IMessageContext
+// ─────────────────────────────────────────────────────────────────────────────
+// MessageContextFake implements IBufferMessageContext so that the typed cast
+// in PipelineExecutor.DispatchApplyAsync succeeds without a real ASP.NET host.
+//
+// Payload fakes implement both IBufferPayload and IStreamPayload — the pipeline
+// casts to the narrower interface based on which transformer sub-type is running.
+// ─────────────────────────────────────────────────────────────────────────────
+
+public sealed class MessageContextFake : IBufferMessageContext, IStreamMessageContext
 {
     public string Method { get; set; } = "GET";
     public Uri    Address { get; set; } = new("http://localhost/test");
     public IMessageHeaders Headers { get; } = new FakeHeaderDictionary();
-    public IPayload Payload { get; }
     public CancellationToken Cancellation { get; } = CancellationToken.None;
     public MessageSide Side { get; }
 
-    private MessageContextFake(IPayload payload, MessageSide side)
+    // ── Typed payload routing ──────────────────────────────────────────────────
+    // The underlying fake implements both IBufferPayload and IStreamPayload.
+    // Each typed interface property presents the correct narrowed view.
+    private readonly FakePayload _payload;
+
+    IPayload        IMessageContext.Payload       => _payload;
+    IBufferPayload  IBufferMessageContext.Payload => _payload;
+    IStreamPayload  IStreamMessageContext.Payload => _payload;
+
+    private MessageContextFake(FakePayload payload, MessageSide side)
     {
-        Payload = payload;
-        Side    = side;
+        _payload = payload;
+        Side     = side;
     }
 
     public static MessageContextFake Create(
         Uri? uri  = null,
         MessageSide side = MessageSide.Request)
     {
-        var ctx = new MessageContextFake(new EmptyPayload(), side);
+        var ctx = new MessageContextFake(FakePayload.Empty(), side);
         if (uri is not null) ctx.Address = uri;
         return ctx;
     }
 
     public static MessageContextFake CreateWithJson(JsonNode node)
-    {
-        var json    = node.ToJsonString();
-        var bytes   = System.Text.Encoding.UTF8.GetBytes(json);
-        var payload = new FakeJsonPayload(bytes);
-        return new MessageContextFake(payload, MessageSide.Request);
-    }
+        => new(FakePayload.FromJson(node), MessageSide.Request);
 
     public static MessageContextFake CreateWithBuffer(
         ReadOnlyMemory<byte> buffer,
         string contentType = "application/octet-stream",
         MessageSide side   = MessageSide.Request)
-        => new(new FakeBufferPayload(buffer, contentType), side);
+        => new(FakePayload.FromBuffer(buffer, contentType), side);
 }
 
-internal sealed class EmptyPayload : IPayload
+// ─────────────────────────────────────────────────────────────────────────────
+// Single fake payload that implements IBufferPayload AND IStreamPayload.
+// MessageContextFake casts to the narrower interface per transformer type.
+// ─────────────────────────────────────────────────────────────────────────────
+
+internal sealed class FakePayload : IBufferPayload, IStreamPayload
 {
-    public bool HasBody => false;
-    public bool IsJson => false;
-    public bool IsStreaming => false;
-    public string? ContentType => null;
-    public ValueTask<JsonNode?> GetJsonAsync(CancellationToken ct = default) => ValueTask.FromResult<JsonNode?>(null);
-    public ValueTask<ReadOnlyMemory<byte>> GetBufferAsync(CancellationToken ct = default) => ValueTask.FromResult(ReadOnlyMemory<byte>.Empty);
-    public ValueTask<PipeReader> GetPipeReaderAsync(CancellationToken ct = default) => ValueTask.FromResult(PipeReader.Create(Stream.Null));
-    public ValueTask SetJsonAsync(JsonNode node, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask SetBufferAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask ReplaceStreamAsync(Stream stream, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask<ReadOnlyMemory<byte>> FlushAsync(CancellationToken ct = default) => ValueTask.FromResult(ReadOnlyMemory<byte>.Empty);
-}
+    // ── IPayload ──────────────────────────────────────────────────────────────
+    public bool    HasBody     { get; private init; }
+    public bool    IsJson      { get; private init; }
+    public bool    IsStreaming { get; private init; }
+    public string? ContentType { get; private init; }
 
-internal sealed class FakeJsonPayload : IPayload
-{
-    private readonly ReadOnlyMemory<byte> _original;
-    private JsonNode? _node;
-    private bool _dirty;
+    private ReadOnlyMemory<byte> _buffer;
+    private JsonNode?            _node;
+    private bool                 _dirty;
 
-    public FakeJsonPayload(ReadOnlyMemory<byte> bytes) => _original = bytes;
+    private FakePayload() { }
 
-    public bool HasBody => true;
-    public bool IsJson => true;
-    public bool IsStreaming => false;
-    public string? ContentType => "application/json";
+    public static FakePayload Empty() => new()
+    {
+        HasBody = false, IsJson = false, IsStreaming = false, ContentType = null
+    };
+
+    public static FakePayload FromJson(JsonNode node)
+    {
+        var p = new FakePayload
+        {
+            HasBody = true, IsJson = true, IsStreaming = false,
+            ContentType = "application/json"
+        };
+        p._node   = node;
+        p._buffer = System.Text.Encoding.UTF8.GetBytes(node.ToJsonString());
+        return p;
+    }
+
+    public static FakePayload FromBuffer(ReadOnlyMemory<byte> buffer, string contentType)
+        => new()
+        {
+            HasBody     = buffer.Length > 0,
+            IsJson      = contentType.StartsWith("application/json", StringComparison.OrdinalIgnoreCase),
+            IsStreaming = contentType.StartsWith("multipart/", StringComparison.OrdinalIgnoreCase)
+                       || contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase),
+            ContentType = contentType,
+            _buffer     = buffer
+        };
+
+    // ── IBufferPayload ────────────────────────────────────────────────────────
 
     public ValueTask<JsonNode?> GetJsonAsync(CancellationToken ct = default)
     {
-        _node ??= JsonNode.Parse(_original.Span);
+        if (_node is null && _buffer.Length > 0)
+            _node = JsonNode.Parse(_buffer.Span);
         return ValueTask.FromResult(_node);
     }
+
+    public ValueTask<ReadOnlyMemory<byte>> GetBufferAsync(CancellationToken ct = default)
+        => ValueTask.FromResult(_buffer);
 
     public ValueTask SetJsonAsync(JsonNode node, CancellationToken ct = default)
     {
@@ -87,43 +123,31 @@ internal sealed class FakeJsonPayload : IPayload
         return ValueTask.CompletedTask;
     }
 
+    public ValueTask SetBufferAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
+    {
+        _buffer = buffer;
+        _node   = null;
+        return ValueTask.CompletedTask;
+    }
+
     public ValueTask<ReadOnlyMemory<byte>> FlushAsync(CancellationToken ct = default)
     {
         if (_dirty && _node is not null)
             return ValueTask.FromResult(
                 (ReadOnlyMemory<byte>)System.Text.Encoding.UTF8.GetBytes(_node.ToJsonString()));
-        return ValueTask.FromResult(_original);
+        return ValueTask.FromResult(_buffer);
     }
 
-    public ValueTask<ReadOnlyMemory<byte>> GetBufferAsync(CancellationToken ct = default)
-        => ValueTask.FromResult(_original);
+    // ── IStreamPayload ────────────────────────────────────────────────────────
+
     public ValueTask<PipeReader> GetPipeReaderAsync(CancellationToken ct = default)
-        => ValueTask.FromResult(PipeReader.Create(new MemoryStream(_original.ToArray())));
-    public ValueTask SetBufferAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default)
-        => ValueTask.CompletedTask;
+        => ValueTask.FromResult(PipeReader.Create(new MemoryStream(_buffer.ToArray())));
+
     public ValueTask ReplaceStreamAsync(Stream stream, CancellationToken ct = default)
         => ValueTask.CompletedTask;
 }
 
-internal sealed class FakeBufferPayload : IPayload
-{
-    private readonly ReadOnlyMemory<byte> _buffer;
-    public bool HasBody => _buffer.Length > 0;
-    public bool IsJson => ContentType?.StartsWith("application/json") == true;
-    public bool IsStreaming => ContentType?.StartsWith("multipart/") == true
-                            || ContentType == "application/octet-stream";
-    public string? ContentType { get; }
-    public FakeBufferPayload(ReadOnlyMemory<byte> buffer, string contentType)
-    { _buffer = buffer; ContentType = contentType; }
-    public ValueTask<JsonNode?> GetJsonAsync(CancellationToken ct = default) => ValueTask.FromResult<JsonNode?>(null);
-    public ValueTask<ReadOnlyMemory<byte>> GetBufferAsync(CancellationToken ct = default) => ValueTask.FromResult(_buffer);
-    public ValueTask<PipeReader> GetPipeReaderAsync(CancellationToken ct = default)
-        => ValueTask.FromResult(PipeReader.Create(new MemoryStream(_buffer.ToArray())));
-    public ValueTask SetJsonAsync(JsonNode node, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask SetBufferAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask ReplaceStreamAsync(Stream stream, CancellationToken ct = default) => ValueTask.CompletedTask;
-    public ValueTask<ReadOnlyMemory<byte>> FlushAsync(CancellationToken ct = default) => ValueTask.FromResult(_buffer);
-}
+// ── FakeHeaderDictionary ──────────────────────────────────────────────────────
 
 public sealed class FakeHeaderDictionary : IMessageHeaders
 {
@@ -131,16 +155,31 @@ public sealed class FakeHeaderDictionary : IMessageHeaders
         = new(StringComparer.OrdinalIgnoreCase);
 
     public IEnumerable<string> Keys => _store.Keys;
-    public bool Contains(string key) => _store.ContainsKey(key) && _store[key].Count > 0;
-    public string? Get(string key) => _store.TryGetValue(key, out var v) ? v.FirstOrDefault() : null;
-    public IEnumerable<string> GetValues(string key) => _store.TryGetValue(key, out var v) ? v : Enumerable.Empty<string>();
-    public void Set(string key, string value) { _store[key] = new List<string> { value }; }
+
+    public bool Contains(string key)
+        => _store.TryGetValue(key, out var v) && v.Count > 0;
+
+    public string? Get(string key)
+        => _store.TryGetValue(key, out var v) ? v.FirstOrDefault() : null;
+
+    public IEnumerable<string> GetValues(string key)
+        => _store.TryGetValue(key, out var v) ? v : Enumerable.Empty<string>();
+
+    public void Set(string key, string value)
+        => _store[key] = new List<string> { value };
+
     public void Append(string key, string value)
     {
-        if (!_store.TryGetValue(key, out var list)) { list = new(); _store[key] = list; }
+        if (!_store.TryGetValue(key, out var list))
+        {
+            list = new List<string>();
+            _store[key] = list;
+        }
         list.Add(value);
     }
+
     public void Remove(string key) => _store.Remove(key);
+
     public bool TryGet(string key, out string? value)
     {
         value = Get(key);

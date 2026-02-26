@@ -36,16 +36,11 @@ builder.Services
 builder.Services.AddMemoryCache();
 
 // ── 1. Core pipeline + ASP.NET Core middleware ───────────────────────────────
+// Resilience (retries, circuit breaking) belongs at the HttpClient layer — use Polly.
 builder.Services.AddReqRepTransformationAspNet(options =>
 {
     options.DefaultTimeout     = TimeSpan.FromSeconds(5);
     options.DefaultFailureMode = FailureMode.LogAndSkip;
-    options.CircuitBreaker     = new CircuitBreakerOptions
-    {
-        WindowSize            = 20,
-        FailureRatioThreshold = 0.50,
-        OpenDuration          = TimeSpan.FromSeconds(30)
-    };
 });
 
 // ── 2. All 22 built-in ITransformer implementations as keyed services ────────

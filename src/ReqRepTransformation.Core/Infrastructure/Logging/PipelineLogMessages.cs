@@ -142,7 +142,7 @@ public static partial class PipelineLogMessages
     [LoggerMessage(
         EventId = 1400,
         Level = LogLevel.Warning,
-        Message = "IBufferTransform attempted stream access — skipping transform | Name={TransformName}")]
+        Message = "IBufferTransformer attempted stream access — skipping transform | Name={TransformName}")]
     public static partial void BufferTransformStreamAccessViolation(
         this ILogger logger,
         string transformName);
@@ -150,7 +150,7 @@ public static partial class PipelineLogMessages
     [LoggerMessage(
         EventId = 1401,
         Level = LogLevel.Warning,
-        Message = "IStreamTransform attempted buffer access — skipping transform | Name={TransformName}")]
+        Message = "IStreamTransformer attempted buffer access — skipping transform | Name={TransformName}")]
     public static partial void StreamTransformBufferAccessViolation(
         this ILogger logger,
         string transformName);

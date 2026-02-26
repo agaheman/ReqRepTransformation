@@ -33,7 +33,7 @@ public sealed class JsonFieldAddTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => context.Payload.IsJson;
 
-    public async ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public async ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var node = await context.Payload.GetJsonAsync(ct).ConfigureAwait(false);
         if (node is not JsonObject obj) return;
@@ -55,7 +55,7 @@ public sealed class JsonFieldRemoveTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => context.Payload.IsJson;
 
-    public async ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public async ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var node = await context.Payload.GetJsonAsync(ct).ConfigureAwait(false);
         if (node is JsonObject obj) obj.Remove(_fieldName);
@@ -78,7 +78,7 @@ public sealed class JsonFieldRenameTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => context.Payload.IsJson;
 
-    public async ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public async ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var node = await context.Payload.GetJsonAsync(ct).ConfigureAwait(false);
         if (node is not JsonObject obj) return;
@@ -111,7 +111,7 @@ public sealed class JsonNestedFieldSetTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => context.Payload.IsJson;
 
-    public async ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public async ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var node = await context.Payload.GetJsonAsync(ct).ConfigureAwait(false);
         if (node is not JsonObject root) return;
@@ -149,7 +149,7 @@ public sealed class JsonGatewayMetadataTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => context.Payload.IsJson;
 
-    public async ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public async ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var node = await context.Payload.GetJsonAsync(ct).ConfigureAwait(false);
         if (node is not JsonObject obj) return;

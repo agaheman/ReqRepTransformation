@@ -34,7 +34,7 @@ public sealed class PathPrefixRewriteTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Address.AbsolutePath.StartsWith(_fromPrefix, StringComparison.OrdinalIgnoreCase);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var current = context.Address.AbsolutePath;
         var newPath = _toPrefix + current[_fromPrefix.Length..];
@@ -64,7 +64,7 @@ public sealed class PathRegexRewriteTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => _pattern?.IsMatch(context.Address.AbsolutePath) == true;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         if (_pattern is null) return ValueTask.CompletedTask;
         var newPath = _pattern.Replace(context.Address.AbsolutePath, _replacement);
@@ -89,7 +89,7 @@ public sealed class AddQueryParamTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => true;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var uri      = context.Address;
         var existing = uri.Query.TrimStart('?');
@@ -113,7 +113,7 @@ public sealed class RemoveQueryParamTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Address.Query.Contains(_key, StringComparison.OrdinalIgnoreCase);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var uri     = context.Address;
         var query   = uri.Query.TrimStart('?');
@@ -146,7 +146,7 @@ public sealed class HostRewriteTransformer : IBufferTransformer
 
     public bool ShouldApply(IMessageContext context) => true;
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         var ub = new UriBuilder(context.Address) { Host = _host };
         if (_port.HasValue)   ub.Port   = _port.Value;
@@ -174,7 +174,7 @@ public sealed class MethodOverrideTransformer : IBufferTransformer
         => _onlyIfCurrentMethod is null
         || context.Method.Equals(_onlyIfCurrentMethod, StringComparison.OrdinalIgnoreCase);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Method = _newMethod;
         return ValueTask.CompletedTask;

@@ -30,7 +30,7 @@ public sealed class JwtForwardTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Headers.Contains(AuthorizationHeader);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
         => ValueTask.CompletedTask; // header is already in context — forwarding is implicit
 }
 
@@ -60,7 +60,7 @@ public sealed class JwtClaimsExtractTransformer : IBufferTransformer
         && auth is not null
         && auth.StartsWith(BearerPrefix, StringComparison.OrdinalIgnoreCase);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         if (!context.Headers.TryGet(AuthorizationHeader, out var auth) || auth is null)
             return ValueTask.CompletedTask;
@@ -100,7 +100,7 @@ public sealed class StripAuthorizationTransformer : IBufferTransformer
     public bool ShouldApply(IMessageContext context)
         => context.Headers.Contains(AuthorizationHeader);
 
-    public ValueTask ApplyAsync(IMessageContext context, CancellationToken ct)
+    public ValueTask ApplyAsync(IBufferMessageContext context, CancellationToken ct)
     {
         context.Headers.Remove(AuthorizationHeader);
         return ValueTask.CompletedTask;
