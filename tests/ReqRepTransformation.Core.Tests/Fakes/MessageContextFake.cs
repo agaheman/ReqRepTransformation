@@ -26,11 +26,14 @@ public sealed class MessageContextFake : IBufferMessageContext, IStreamMessageCo
     // ── Typed payload routing ──────────────────────────────────────────────────
     // The underlying fake implements both IBufferPayload and IStreamPayload.
     // Each typed interface property presents the correct narrowed view.
+    // The public property gives test code direct access without a cast.
     private readonly FakePayload _payload;
 
-    IPayload        IMessageContext.Payload       => _payload;
-    IBufferPayload  IBufferMessageContext.Payload => _payload;
-    IStreamPayload  IStreamMessageContext.Payload => _payload;
+    /// <summary>Direct payload access for test assertions (GetJsonAsync, GetBufferAsync, etc.).</summary>
+    public IBufferPayload Payload                    => _payload;
+    IPayload        IMessageContext.Payload          => _payload;
+    IBufferPayload  IBufferMessageContext.Payload    => _payload;
+    IStreamPayload  IStreamMessageContext.Payload    => _payload;
 
     private MessageContextFake(FakePayload payload, MessageSide side)
     {

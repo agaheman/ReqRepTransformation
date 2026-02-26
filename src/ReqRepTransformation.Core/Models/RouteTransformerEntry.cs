@@ -5,7 +5,7 @@ namespace ReqRepTransformation.Core.Models;
 ///
 /// This is the bridge between the persistence layer and the DI container:
 ///   - <see cref="TransformerKey"/> is used to resolve <c>ITransformer</c> from the keyed DI container.
-///   - <see cref="Params"/> carries the JSON configuration that the transformer reads at runtime.
+///   - <see cref="ParamsJson"/> carries the JSON configuration that the transformer reads at runtime.
 ///   - <see cref="Order"/> determines the execution sequence within the pipeline side.
 ///   - <see cref="Side"/> indicates whether this runs on the request or response leg.
 ///
@@ -18,7 +18,7 @@ public sealed record RouteTransformerEntry
     /// <summary>
     /// Keyed service registration key for resolving <c>ITransformer</c> from DI.
     /// Must match a value registered via <c>AddKeyedTransient&lt;ITransformer, ConcreteTransformer&gt;(key)</c>.
-    /// See <see cref="TransformerKeys"/> for built-in constants.
+    /// See <c>TransformerKeys</c> in <c>ReqRepTransformation.BuiltInTransformers</c> for built-in constants.
     /// </summary>
     public required string TransformerKey { get; init; }
 

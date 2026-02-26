@@ -22,8 +22,8 @@ public sealed class TransformationException : Exception
 }
 
 /// <summary>
-/// Thrown when an <see cref="IStreamTransformer"/> attempts to access buffered payload methods,
-/// or when an <see cref="IBufferTransformer"/> attempts to access streaming methods.
+/// Thrown when an <c>IStreamTransformer</c> attempts to access buffered payload methods,
+/// or when an <c>IBufferTransformer</c> attempts to access streaming methods.
 /// With typed context dispatch this exception is a last-resort guard — the compile-time
 /// type system prevents the wrong method being called in correctly-implemented transformers.
 /// </summary>
